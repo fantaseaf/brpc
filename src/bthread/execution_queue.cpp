@@ -24,14 +24,13 @@
 
 namespace bthread {
 
-BAIDU_CASSERT(sizeof(TaskNode) == 128, sizeof_TaskNode_must_be_128);
+//May be false on different platforms
+//BAIDU_CASSERT(sizeof(TaskNode) == 128, sizeof_TaskNode_must_be_128);
+//BAIDU_CASSERT(offsetof(TaskNode, static_task_mem) + sizeof(TaskNode().static_task_mem) == 128, sizeof_TaskNode_must_be_128);
 BAIDU_CASSERT(sizeof(ExecutionQueue<int>) == sizeof(ExecutionQueueBase),
               sizeof_ExecutionQueue_must_be_the_same_with_ExecutionQueueBase);
 BAIDU_CASSERT(sizeof(TaskIterator<int>) == sizeof(TaskIteratorBase),
               sizeof_TaskIterator_must_be_the_same_with_TaskIteratorBase);
-BAIDU_CASSERT(offsetof(TaskNode, static_task_mem)
-                + sizeof(TaskNode().static_task_mem) == 128,
-              sizeof_TaskNode_must_be_128);
 namespace /*anonymous*/ {
 typedef butil::ResourceId<ExecutionQueueBase> slot_id_t;
 
@@ -102,15 +101,22 @@ void ExecutionQueueBase::start_execute(TaskNode* node) {
         }
     }
 
-    bthread_t tid;
-    // We start the execution thread in background instead of foreground as
-    // we can't determine whether the code after execute() is urgent (like
-    // unlock a pthread_mutex_t) in which case implicit context switch may
-    // cause undefined behavior (e.g. deadlock)
-    if (bthread_start_background(&tid, &_options.bthread_attr, 
-                _execute_tasks, node) != 0) {
-        PLOG(FATAL) << "Fail to start bthread";
-        _execute_tasks(node);
+    if (nullptr == _options.executor) {
+        bthread_t tid;
+        // We start the execution thread in background instead of foreground as
+        // we can't determine whether the code after execute() is urgent (like
+        // unlock a pthread_mutex_t) in which case implicit context switch may
+        // cause undefined behavior (e.g. deadlock)
+        if (bthread_start_background(&tid, &_options.bthread_attr,
+                                     _execute_tasks, node) != 0) {
+            PLOG(FATAL) << "Fail to start bthread";
+            _execute_tasks(node);
+        }
+    } else {
+        if (_options.executor->submit(_execute_tasks, node) != 0) {
+            PLOG(FATAL) << "Fail to submit task";
+            _execute_tasks(node);
+        }
     }
 }
 

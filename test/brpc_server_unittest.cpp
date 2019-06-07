@@ -3,7 +3,6 @@
 
 // Date: Sun Jul 13 15:04:18 CST 2014
 
-#include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <fstream>
@@ -359,7 +358,7 @@ TEST_F(ServerTest, only_allow_protocols_in_enabled_protocols) {
     test::EchoService_Stub stub(&chan);
     stub.Echo(&cntl, &req, &res, NULL);
     ASSERT_TRUE(cntl.Failed());
-    ASSERT_TRUE(cntl.ErrorText().find("Got EOF of fd") != std::string::npos);
+    ASSERT_TRUE(cntl.ErrorText().find("Got EOF of ") != std::string::npos);
     
     ASSERT_EQ(0, server.Stop(0));
     ASSERT_EQ(0, server.Join());
@@ -486,6 +485,7 @@ TEST_F(ServerTest, missing_required_fields) {
     http_channel.CallMethod(NULL, &cntl, NULL, NULL, NULL);
     ASSERT_TRUE(cntl.Failed());
     ASSERT_EQ(brpc::EHTTP, cntl.ErrorCode());
+    LOG(INFO) << cntl.ErrorText();
     ASSERT_EQ(brpc::HTTP_STATUS_BAD_REQUEST, cntl.http_response().status_code());
     ASSERT_EQ(0, service_v1.ncalled.load());
 
@@ -1043,7 +1043,7 @@ TEST_F(ServerTest, logoff_and_multiple_start) {
         ASSERT_EQ(0, server.Stop(-1));
         ASSERT_EQ(0, server.Join());
         timer.stop();
-        EXPECT_TRUE(labs(timer.m_elapsed() - 100) < 10) << timer.m_elapsed();
+        EXPECT_TRUE(labs(timer.m_elapsed() - 100) < 15) << timer.m_elapsed();
         bthread_join(tid, NULL);
     }
 
@@ -1066,7 +1066,7 @@ TEST_F(ServerTest, logoff_and_multiple_start) {
         timer.stop();
         // Assertion will fail since EchoServiceImpl::Echo is holding
         // additional reference to the `Socket'
-        // EXPECT_TRUE(timer.m_elapsed() < 10) << timer.m_elapsed();
+        // EXPECT_TRUE(timer.m_elapsed() < 15) << timer.m_elapsed();
         bthread_join(tid, NULL);
     }
 
@@ -1089,7 +1089,7 @@ TEST_F(ServerTest, logoff_and_multiple_start) {
         timer.stop();
         // Assertion will fail since EchoServiceImpl::Echo is holding
         // additional reference to the `Socket'
-        // EXPECT_TRUE(labs(timer.m_elapsed() - 50) < 10) << timer.m_elapsed();
+        // EXPECT_TRUE(labs(timer.m_elapsed() - 50) < 15) << timer.m_elapsed();
         bthread_join(tid, NULL);
     }
     
@@ -1109,7 +1109,7 @@ TEST_F(ServerTest, logoff_and_multiple_start) {
         ASSERT_EQ(0, server.Stop(1000));
         ASSERT_EQ(0, server.Join());
         timer.stop();
-        EXPECT_TRUE(labs(timer.m_elapsed() - 100) < 10) << timer.m_elapsed();
+        EXPECT_TRUE(labs(timer.m_elapsed() - 100) < 15) << timer.m_elapsed();
         bthread_join(tid, NULL);
     }
 }
@@ -1158,7 +1158,7 @@ TEST_F(ServerTest, serving_requests) {
 TEST_F(ServerTest, create_pid_file) {
     {
         brpc::Server server;
-        server._options.pid_file = "$PWD//pid_dir/sub_dir/./.server.pid";
+        server._options.pid_file = "./pid_dir/sub_dir/./.server.pid";
         server.PutPidFileIfNeeded();
         pid_t pid = getpid();
         std::ifstream fin("./pid_dir/sub_dir/.server.pid");
@@ -1178,7 +1178,7 @@ TEST_F(ServerTest, range_start) {
     butil::EndPoint point;
     for (int i = START_PORT; i < END_PORT; ++i) {
         point.port = i;
-        listen_fds[i - START_PORT].reset(butil::tcp_listen(point, true));
+        listen_fds[i - START_PORT].reset(butil::tcp_listen(point));
     }
 
     brpc::Server server;
@@ -1281,108 +1281,6 @@ TEST_F(ServerTest, too_big_message) {
 
     server.Stop(0);
     server.Join();
-}
-
-struct EchoOpensslMsg {};
-inline std::ostream& operator<<(std::ostream& os, EchoOpensslMsg) {
-    std::ifstream t("openssl.msg");
-    return os << "============ The output of previous openssl ============\n"
-              << t.rdbuf()
-              << "\n============ The output ends here ============\n";
-}
-void CheckCert(const char* cname, const char* cert) {
-    std::string cmd = butil::string_printf(
-        "echo 'Q' | openssl s_client -connect localhost:8613 "
-        "-servername %s > openssl.msg &&  grep %s openssl.msg", cname, cert);
-    ASSERT_EQ(0, system(cmd.c_str())) << EchoOpensslMsg();
-}
-
-std::string GetRawPemString(const char* fname) {
-    butil::ScopedFILE fp(fname, "r");
-    char buf[4096];
-    int size = read(fileno(fp), buf, sizeof(buf));
-    std::string raw;
-    raw.append(buf, size);
-    return raw;
-}
-
-TEST_F(ServerTest, ssl_sni) {
-     brpc::Server server;
-     brpc::ServerOptions options;
-     {
-         brpc::CertInfo cert;
-         cert.certificate = "cert1.crt";
-         cert.private_key = "cert1.key";
-         cert.sni_filters.push_back("localhost");
-         options.ssl_options.default_cert = cert;
-     }
-     {
-         brpc::CertInfo cert;
-         cert.certificate = GetRawPemString("cert2.crt");
-         cert.private_key = GetRawPemString("cert2.key");
-         cert.sni_filters.push_back("*.localdomain");
-         options.ssl_options.certs.push_back(cert);
-     }
-     ASSERT_EQ(0, server.Start(8613, &options));
-     CheckCert("localhost", "cert1");
-
-#ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
-     CheckCert("localhost.localdomain", "cert2");
-#endif  // SSL_CTRL_SET_TLSEXT_HOSTNAME
-     
-     server.Stop(0);
-     server.Join();
-}
-
-TEST_F(ServerTest, ssl_reload) {
-     brpc::Server server;
-     brpc::ServerOptions options;
-     {
-         brpc::CertInfo cert;
-         cert.certificate = "cert1.crt";
-         cert.private_key = "cert1.key";
-         cert.sni_filters.push_back("localhost");
-         options.ssl_options.default_cert = cert;
-     }
-     ASSERT_EQ(0, server.Start(8613, &options));
-     CheckCert("localhost", "cert1");
-
-     {
-         brpc::CertInfo cert;
-         cert.certificate = GetRawPemString("cert2.crt");
-         cert.private_key = GetRawPemString("cert2.key");
-         cert.sni_filters.push_back("*.localdomain");
-         ASSERT_EQ(0, server.AddCertificate(cert));
-     }
-#ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
-    CheckCert("localhost.localdomain", "cert2");
-#endif  // SSL_CTRL_SET_TLSEXT_HOSTNAME
-
-     {
-         brpc::CertInfo cert;
-         cert.certificate = GetRawPemString("cert2.crt");
-         cert.private_key = GetRawPemString("cert2.key");
-         ASSERT_EQ(0, server.RemoveCertificate(cert));
-     }
-#ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
-     CheckCert("localhost.localdomain", "cert1");
-#endif  // SSL_CTRL_SET_TLSEXT_HOSTNAME
-
-     {
-         brpc::CertInfo cert;
-         cert.certificate = GetRawPemString("cert2.crt");
-         cert.private_key = GetRawPemString("cert2.key");
-         cert.sni_filters.push_back("*.localdomain");
-         std::vector<brpc::CertInfo> certs;
-         certs.push_back(cert);
-         ASSERT_EQ(0, server.ResetCertificates(certs));
-     }
-#ifdef SSL_CTRL_SET_TLSEXT_HOSTNAME
-     CheckCert("localhost.localdomain", "cert2");
-#endif  // SSL_CTRL_SET_TLSEXT_HOSTNAME
-
-     server.Stop(0);
-     server.Join();
 }
 
 TEST_F(ServerTest, max_concurrency) {

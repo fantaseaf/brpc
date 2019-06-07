@@ -24,6 +24,18 @@
 #include <sys/time.h>                        // timeval, gettimeofday
 #include <stdint.h>                          // int64_t, uint64_t
 
+#if defined(NO_CLOCK_GETTIME_IN_MAC)
+#include <mach/mach.h>
+# define CLOCK_REALTIME CALENDAR_CLOCK
+# define CLOCK_MONOTONIC SYSTEM_CLOCK
+
+typedef int clockid_t;
+
+// clock_gettime is not available in MacOS < 10.12
+int clock_gettime(clockid_t id, timespec* time);
+
+#endif
+
 namespace butil {
 
 // Get SVN revision of this copy.
@@ -210,6 +222,11 @@ inline uint64_t clock_cycles() {
         );
     return ((uint64_t)hi << 32) | lo;
 }
+extern int64_t read_invariant_cpu_frequency();
+// Be positive iff:
+// 1 Intel x86_64 CPU (multiple cores) supporting constant_tsc and
+// nonstop_tsc(check flags in /proc/cpuinfo)
+extern int64_t invariant_cpu_freq;
 }  // namespace detail
 
 // ---------------------------------------------------------------
@@ -219,27 +236,35 @@ inline uint64_t clock_cycles() {
 // note: Inlining shortens time cost per-call for 15ns in a loop of many
 //       calls to this function.
 inline int64_t cpuwide_time_ns() {
-    extern int64_t read_invariant_cpu_frequency();
-    // Be positive iff:
-    // 1 Intel x86_64 CPU (multiple cores) supporting constant_tsc and
-    // nonstop_tsc(check flags in /proc/cpuinfo)
-    extern int64_t invariant_cpu_freq;
-    
-    if (invariant_cpu_freq > 0) {
+#if !defined(BAIDU_INTERNAL)
+    // nearly impossible to get the correct invariant cpu frequency on
+    // different CPU and machines. CPU-ID rarely works and frequencies
+    // in "model name" and "cpu Mhz" are both unreliable.
+    // Since clock_gettime() in newer glibc/kernel is much faster(~30ns)
+    // which is closer to the previous impl. of cpuwide_time(~10ns), we
+    // simply use the monotonic time to get rid of all related issues.
+    timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec * 1000000000L + now.tv_nsec;
+#else
+    int64_t cpu_freq = detail::invariant_cpu_freq;
+    if (cpu_freq > 0) {
         const uint64_t tsc = detail::clock_cycles();
-        const uint64_t sec = tsc / invariant_cpu_freq;
+        //Try to avoid overflow
+        const uint64_t sec = tsc / cpu_freq;
+        const uint64_t remain = tsc % cpu_freq;
         // TODO: should be OK until CPU's frequency exceeds 16GHz.
-        return (tsc - sec * invariant_cpu_freq) * 1000000000L /
-            invariant_cpu_freq + sec * 1000000000L;
-    } else if (!invariant_cpu_freq) {
+        return remain * 1000000000L / cpu_freq + sec * 1000000000L;
+    } else if (!cpu_freq) {
         // Lack of necessary features, return system-wide monotonic time instead.
         return monotonic_time_ns();
     } else {
         // Use a thread-unsafe method(OK to us) to initialize the freq
         // to save a "if" test comparing to using a local static variable
-        invariant_cpu_freq = read_invariant_cpu_frequency();
+        detail::invariant_cpu_freq = detail::read_invariant_cpu_frequency();
         return cpuwide_time_ns();
     }
+#endif // defined(BAIDU_INTERNAL)
 }
 
 inline int64_t cpuwide_time_us() {

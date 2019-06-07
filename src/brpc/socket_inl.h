@@ -54,7 +54,6 @@ inline SocketOptions::SocketOptions()
     , user(NULL)
     , on_edge_triggered_events(NULL)
     , health_check_interval_s(-1)
-    , ssl_ctx(NULL)
     , keytable_pool(NULL)
     , conn(NULL)
     , app_connect(NULL)
@@ -242,8 +241,9 @@ inline void Socket::SetLogOff() {
     }
 }
 
-inline bool Socket::IsLogOff() const {
-    return _logoff_flag.load(butil::memory_order_relaxed);
+inline bool Socket::IsAvailable() const {
+    return !_logoff_flag.load(butil::memory_order_relaxed) &&
+        (_ninflight_app_health_check.load(butil::memory_order_relaxed) == 0);
 }
 
 static const uint32_t EOF_FLAG = (1 << 31);

@@ -61,7 +61,7 @@ void NsheadMcpackAdaptor::ParseRequestFromIOBuf(
     mcpack2pb::MessageHandler handler = mcpack2pb::find_message_handler(msg_name);
     if (!handler.parse_from_iobuf(pb_req, raw_req.body)) {
         cntl->SetFailed(EREQUEST, "Fail to parse request message, "
-                        "request_size=%" PRIu64, raw_req.body.length());
+                        "request_size=%" PRIu64, (uint64_t)raw_req.body.length());
         return;
     }
 }
@@ -157,7 +157,7 @@ void PackNsheadMcpackRequest(butil::IOBuf* buf,
                              const butil::IOBuf& request,
                              const Authenticator* /*not supported*/) {
     ControllerPrivateAccessor accessor(controller);
-    if (accessor.connection_type() == CONNECTION_TYPE_SINGLE) {
+    if (controller->connection_type() == CONNECTION_TYPE_SINGLE) {
         return controller->SetFailed(
             EINVAL, "nshead_mcpack can't work with CONNECTION_TYPE_SINGLE");
     }

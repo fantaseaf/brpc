@@ -21,7 +21,7 @@
 #include <brpc/policy/hulu_pbrpc_controller.h>
 #include "echo.pb.h"
 
-DEFINE_string(attachment, "foo", "Carry this along with requests");
+DEFINE_string(attachment, "", "Carry this along with requests");
 DEFINE_string(connection_type, "", "Connection type. Available values: single, pooled, short");
 DEFINE_string(server, "0.0.0.0:8000", "IP Address of server");
 DEFINE_string(load_balancer, "", "The algorithm for load balancing");
@@ -72,21 +72,13 @@ int main(int argc, char* argv[]) {
         // the response comes back or error occurs(including timedout).
         stub.Echo(&cntl, &request, &response, NULL);
         if (!cntl.Failed()) {
-            if (cntl.response_attachment().empty()) {
-                LOG(INFO) << "Received response from " << cntl.remote_side()
-                          << ": " << response.message()
-                          << " response_source_addr=" << cntl.response_source_addr()
-                          << " response_user_data=\"" << cntl.response_user_data()
-                          << " latency=" << cntl.latency_us() << "us";
-            } else {
-                LOG(INFO) << "Received response from " << cntl.remote_side()
-                          << " to " << cntl.local_side()
-                          << ": " << response.message() << " (attached="
-                          << cntl.response_attachment() << ")"
-                          << " response_source_addr=" << cntl.response_source_addr()
-                          << " response_user_data=\"" << cntl.response_user_data()
-                          << "\" latency=" << cntl.latency_us() << "us";
-            }
+            LOG(INFO) << "Received response from " << cntl.remote_side()
+                << " to " << cntl.local_side()
+                << ": " << response.message() << " (attached="
+                << cntl.response_attachment() << ")"
+                << " response_source_addr=" << cntl.response_source_addr()
+                << " response_user_data=\"" << cntl.response_user_data()
+                << "\" latency=" << cntl.latency_us() << "us";
         } else {
             LOG(WARNING) << cntl.ErrorText();
         }

@@ -35,7 +35,7 @@
 #include "brpc/details/usercode_backup_pool.h"
 
 extern "C" {
-void bthread_assign_data(void* data) __THROW;
+void bthread_assign_data(void* data);
 }
 
 
@@ -48,7 +48,8 @@ namespace policy {
 //    problems on machines with different byte order)
 // 3. Use service->name() (rather than service->full_name()) + method_index
 //    to locate method defined in .proto file
-// 4. `user_message_size' is set iff request/response has attachment
+// 4. 'user_message_size' is the size of protobuf request,
+//    and should be set if request/response has attachment
 // 5. Not supported:
 //    chunk_info                   - hulu doesn't support either
 //    TalkType                     - nobody has use this so far in hulu
@@ -141,8 +142,7 @@ private:
 };
 
 inline void PackHuluHeader(char* hulu_header, int meta_size, int body_size) {
-    // dummy supresses strict-aliasing warning.
-    uint32_t* dummy = reinterpret_cast<uint32_t*>(hulu_header);
+    uint32_t* dummy = reinterpret_cast<uint32_t*>(hulu_header); // suppress strict-alias warning
     *dummy = *reinterpret_cast<const uint32_t*>("HULU");
     HuluRawPacker rp(hulu_header + 4);
     rp.pack32(meta_size + body_size).pack32(meta_size);
@@ -222,21 +222,19 @@ static void SendHuluResponse(int64_t correlation_id,
                              HuluController* cntl, 
                              const google::protobuf::Message* req,
                              const google::protobuf::Message* res,
-                             Socket* socket_ptr,
                              const Server* server,
-                             MethodStatus* method_status_raw,
-                             long start_parse_us) {
+                             MethodStatus* method_status,
+                             int64_t received_us) {
     ControllerPrivateAccessor accessor(cntl);
     Span* span = accessor.span();
     if (span) {
         span->set_start_send_us(butil::cpuwide_time_us());
     }
-    ScopedMethodStatus method_status(method_status_raw);
-    SocketUniquePtr sock(socket_ptr);
+    Socket* sock = accessor.get_sending_socket();
     std::unique_ptr<HuluController, LogErrorTextAndDelete> recycle_cntl(cntl);
+    ConcurrencyRemover concurrency_remover(method_status, cntl, received_us);
     std::unique_ptr<const google::protobuf::Message> recycle_req(req);
     std::unique_ptr<const google::protobuf::Message> recycle_res(res);
-    ScopedRemoveConcurrency remove_concurrency_dummy(server, cntl);
 
     if (cntl->IsCloseConnection()) {
         sock->SetFailed();
@@ -318,10 +316,6 @@ static void SendHuluResponse(int64_t correlation_id,
         // TODO: this is not sent
         span->set_sent_us(butil::cpuwide_time_us());
     }
-    if (method_status) {
-        method_status.release()->OnResponded(
-            !cntl->Failed(), butil::cpuwide_time_us() - start_parse_us);
-    }
 }
 
 // Defined in baidu_rpc_protocol.cpp
@@ -336,7 +330,8 @@ void EndRunningCallMethodInPool(
 void ProcessHuluRequest(InputMessageBase* msg_base) {
     const int64_t start_parse_us = butil::cpuwide_time_us();
     DestroyingPtr<MostCommonMessage> msg(static_cast<MostCommonMessage*>(msg_base));
-    SocketUniquePtr socket(msg->ReleaseSocket());
+    SocketUniquePtr socket_guard(msg->ReleaseSocket());
+    Socket* socket = socket_guard.get();
     const Server* server = static_cast<const Server*>(msg_base->arg());
     ScopedNonServiceError non_service_error(server);
 
@@ -354,7 +349,12 @@ void ProcessHuluRequest(InputMessageBase* msg_base) {
         sample->set_method_index(meta.method_index());
         sample->set_compress_type(req_cmp_type);
         sample->set_protocol_type(PROTOCOL_HULU_PBRPC);
-        sample->set_attachment_size(meta.user_message_size());
+        sample->set_user_data(meta.user_data());
+        if (meta.has_user_message_size()
+            && static_cast<size_t>(meta.user_message_size()) < msg->payload.size()) {
+            size_t attachment_size = msg->payload.size() - meta.user_message_size();
+            sample->set_attachment_size(attachment_size);
+        }
         sample->request = msg->payload;
         sample->submit(start_parse_us);
     }
@@ -382,7 +382,9 @@ void ProcessHuluRequest(InputMessageBase* msg_base) {
         .set_remote_side(socket->remote_side())
         .set_local_side(socket->local_side())
         .set_auth_context(socket->auth_context())
-        .set_request_protocol(PROTOCOL_HULU_PBRPC);
+        .set_request_protocol(PROTOCOL_HULU_PBRPC)
+        .set_begin_time_us(msg->received_us())
+        .move_in_server_receiving_sock(socket_guard);
 
     if (meta.has_user_data()) {
         cntl->set_request_user_data(meta.user_data());
@@ -405,16 +407,23 @@ void ProcessHuluRequest(InputMessageBase* msg_base) {
             msg->base_real_us());
         accessor.set_span(span);
         span->set_log_id(meta.log_id());
-        span->set_remote_side(socket->remote_side());
+        span->set_remote_side(cntl->remote_side());
         span->set_protocol(PROTOCOL_HULU_PBRPC);
         span->set_received_us(msg->received_us());
         span->set_start_parse_us(start_parse_us);
         span->set_request_size(msg->payload.size() + msg->meta.size() + 12);
     }
+
     MethodStatus* method_status = NULL;
     do {
         if (!server->IsRunning()) {
             cntl->SetFailed(ELOGOFF, "Server is stopping");
+            break;
+        }
+
+        if (socket->is_overcrowded()) {
+            cntl->SetFailed(EOVERCROWDED, "Connection to %s is overcrowded",
+                            butil::endpoint2str(socket->remote_side()).c_str());
             break;
         }
 
@@ -448,10 +457,10 @@ void ProcessHuluRequest(InputMessageBase* msg_base) {
         non_service_error.release();
         method_status = sp->status;
         if (method_status) {
-            if (!method_status->OnRequested()) {
-                cntl->SetFailed(ELIMIT, "Reached %s's max_concurrency=%d",
-                                sp->method->full_name().c_str(),
-                                method_status->max_concurrency());
+            int rejected_cc = 0;
+            if (!method_status->OnRequested(&rejected_cc)) {
+                cntl->SetFailed(ELIMIT, "Rejected by %s's ConcurrencyLimiter, concurrency=%d",
+                                sp->method->full_name().c_str(), rejected_cc);
                 break;
             }
         }
@@ -478,19 +487,21 @@ void ProcessHuluRequest(InputMessageBase* msg_base) {
                             CompressTypeToCStr(req_cmp_type), reqsize);
             break;
         }
-        // optional, just release resourse ASAP
-        msg.reset();
-        req_buf.clear();
 
         res.reset(svc->GetResponsePrototype(method).New());
         // `socket' will be held until response has been sent
         google::protobuf::Closure* done = ::brpc::NewCallback<
             int64_t, HuluController*, const google::protobuf::Message*,
-            const google::protobuf::Message*, Socket*, const Server*,
-                  MethodStatus *, long>(
+            const google::protobuf::Message*, const Server*,
+                  MethodStatus *, int64_t>(
                 &SendHuluResponse, correlation_id, cntl.get(),
-                req.get(), res.get(), socket.release(), server,
-                method_status, start_parse_us);
+                req.get(), res.get(), server,
+                method_status, msg->received_us());
+
+        // optional, just release resourse ASAP
+        msg.reset();
+        req_buf.clear();
+
         if (span) {
             span->set_start_callback_us(butil::cpuwide_time_us());
             span->AsParent();
@@ -513,8 +524,8 @@ void ProcessHuluRequest(InputMessageBase* msg_base) {
     // `cntl', `req' and `res' will be deleted inside `SendHuluResponse'
     // `socket' will be held until response has been sent
     SendHuluResponse(correlation_id, cntl.release(),
-                     req.release(), res.release(), socket.release(), server,
-                     method_status, -1);
+                     req.release(), res.release(), server,
+                     method_status, msg->received_us());
 }
 
 bool VerifyHuluRequest(const InputMessageBase* msg_base) {
@@ -591,7 +602,7 @@ void ProcessHuluResponse(InputMessageBase* msg_base) {
                     ERESPONSE, "Fail to parse response message, "
                     "CompressType=%s, response_size=%" PRIu64, 
                     CompressTypeToCStr(res_cmp_type),
-                    msg->payload.length());
+                    (uint64_t)msg->payload.length());
             }
         } // else silently ignore the response.
         HuluController* hulu_controller = dynamic_cast<HuluController*>(cntl);
@@ -634,6 +645,7 @@ void PackHuluRequest(butil::IOBuf* req_buf,
         meta.set_method_index(cntl->rpc_dump_meta()->method_index());
         meta.set_compress_type(
             CompressType2Hulu(cntl->rpc_dump_meta()->compress_type()));
+        meta.set_user_data(cntl->rpc_dump_meta()->user_data());
     } else {
         return cntl->SetFailed(ENOMETHOD, "method is NULL");
     }

@@ -68,7 +68,7 @@ public:
     {
         ASSERT_TRUE(!_run_times.empty());
         long diff = timespec_diff_us(_run_times[0], expect_run_time);
-        EXPECT_LE(labs(diff), 10000);
+        EXPECT_LE(labs(diff), 50000);
     }
     
     void expect_not_run() {
@@ -131,7 +131,7 @@ TEST(TimerThreadTest, RunTasks) {
     tm.start();
     timer_thread.stop_and_join();
     tm.stop();
-    ASSERT_LE(tm.m_elapsed(), 10);
+    ASSERT_LE(tm.m_elapsed(), 15);
 
     // verify all runs in expected time range.
     keeper1.expect_first_run();

@@ -338,7 +338,7 @@ public:
     explicit RtmpSubStream(brpc::RtmpMessageHandler* mh)
         : _message_handler(mh) {}
     // @RtmpStreamBase
-    void OnMetaData(brpc::AMFObject*, const butil::StringPiece&);
+    void OnMetaData(brpc::RtmpMetaData*, const butil::StringPiece&);
     void OnSharedObjectMessage(brpc::RtmpSharedObjectMessage* msg);
     void OnAudioMessage(brpc::RtmpAudioMessage* msg);
     void OnVideoMessage(brpc::RtmpVideoMessage* msg);
@@ -352,7 +352,7 @@ void RtmpSubStream::OnFirstMessage() {
     _message_handler->OnPlayable();
 }
 
-void RtmpSubStream::OnMetaData(brpc::AMFObject* obj, const butil::StringPiece& name) {
+void RtmpSubStream::OnMetaData(brpc::RtmpMetaData* obj, const butil::StringPiece& name) {
     _message_handler->OnMetaData(obj, name);
 }
 
@@ -837,7 +837,7 @@ TEST(RtmpTest, retrying_stream) {
     LOG(INFO) << "Stopping server";
     server.Stop(0);
     server.Join();
-    LOG(INFO) << "Stopped server and sleep for awhile";
+    LOG(INFO) << "Stopped server and sleep for a while";
     sleep(3);
     ASSERT_EQ(0, server.Start(8576, &server_opt));
     sleep(3);

@@ -150,7 +150,8 @@ void UbrpcAdaptor::ParseNsheadMeta(
     if (buf.size() != user_req_size) {
         if (buf.size() < user_req_size) {
             cntl->SetFailed(EREQUEST, "request_size=%" PRIu64 " is shorter than"
-                            "specified=%" PRIu64, buf.size(), user_req_size);
+                            "specified=%" PRIu64, (uint64_t)buf.size(),
+                            (uint64_t)user_req_size);
             return;
         }
         buf.pop_back(buf.size() - user_req_size);
@@ -420,7 +421,8 @@ static void ParseResponse(Controller* cntl, butil::IOBuf& buf,
     if (buf.size() != user_res_size) {
         if (buf.size() < user_res_size) {
             cntl->SetFailed(ERESPONSE, "response_size=%" PRIu64 " is shorter "
-                            "than specified=%" PRIu64, buf.size(), user_res_size);
+                            "than specified=%" PRIu64, (uint64_t)buf.size(),
+                            (uint64_t)user_res_size);
             return;
         }
         buf.pop_back(buf.size() - user_res_size);
@@ -539,7 +541,7 @@ void PackUbrpcRequest(butil::IOBuf* buf,
                       const butil::IOBuf& request,
                       const Authenticator* /*not supported*/) {
     ControllerPrivateAccessor accessor(controller);
-    if (accessor.connection_type() == CONNECTION_TYPE_SINGLE) {
+    if (controller->connection_type() == CONNECTION_TYPE_SINGLE) {
         return controller->SetFailed(
             EINVAL, "ubrpc protocol can't work with CONNECTION_TYPE_SINGLE");
     }

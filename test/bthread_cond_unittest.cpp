@@ -115,7 +115,7 @@ TEST(CondTest, sanity) {
             << "bthread=" << it->first
             << " count=" << it->second
             << " avg=" << avg_count;
-        printf("%lu wakes up %d times\n", it->first, it->second);
+        printf("%" PRId64 " wakes up %d times\n", it->first, it->second);
     }
 
     bthread_cond_destroy(&a.c);
@@ -176,15 +176,12 @@ TEST(CondTest, cpp_wrapper) {
                                     cv_mutex_waiter, &a));
     }
     ASSERT_EQ(0, pthread_create(&signal_thread, NULL, cv_signaler, &a));
-    LOG(INFO) << "Start to sleep";
     bthread_usleep(100L * 1000);
     {
         BAIDU_SCOPED_LOCK(a.mutex);
         stop = true;
     }
-    LOG(INFO) << "Stopped, join signal_thread";
     pthread_join(signal_thread, NULL);
-    LOG(INFO) << "signal_thread quit, join waiter_threads";
     a.cond.notify_all();
     for (size_t i = 0; i < ARRAY_SIZE(bmutex_waiter_threads); ++i) {
         pthread_join(bmutex_waiter_threads[i], NULL);

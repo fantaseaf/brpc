@@ -20,9 +20,11 @@ TEST(URITest, everything) {
     ASSERT_EQ(*uri.GetQuery("wd"), "uri");
     ASSERT_FALSE(uri.GetQuery("nonkey"));
 
+    std::string schema;
     std::string host_out;
     int port_out = -1;
-    brpc::ParseHostAndPortFromURL(uri_str.c_str(), &host_out, &port_out);
+    brpc::ParseURL(uri_str.c_str(), &schema, &host_out, &port_out);
+    ASSERT_EQ("foobar", schema);
     ASSERT_EQ("www.baidu.com", host_out);
     ASSERT_EQ(80, port_out);
 }
@@ -36,7 +38,7 @@ TEST(URITest, only_host) {
     ASSERT_EQ("", uri.path());
     ASSERT_EQ("", uri.user_info());
     ASSERT_EQ("", uri.fragment());
-    ASSERT_EQ(2, uri.QueryCount());
+    ASSERT_EQ(2u, uri.QueryCount());
     ASSERT_TRUE(uri.GetQuery("wd"));
     ASSERT_EQ(*uri.GetQuery("wd"), "uri2");
     ASSERT_TRUE(uri.GetQuery("nonkey"));
@@ -473,54 +475,3 @@ TEST(URITest, query_remover_key_value_not_changed_after_modified_query) {
     ASSERT_EQ(qr.value(), "value2");
 }
 
-TEST(URITest, query_splitter_sanity) {
-    std::string query = "key1=value1&key2=value2&key3=value3";
-    {
-        brpc::QuerySplitter qs(query);
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key1");
-        ASSERT_EQ(qs.value(), "value1");
-        ++qs;
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key2");
-        ASSERT_EQ(qs.value(), "value2");
-        ++qs;
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key3");
-        ASSERT_EQ(qs.value(), "value3");
-        ++qs;
-        ASSERT_FALSE(qs);
-    }
-    {
-        brpc::QuerySplitter qs(query.data(), query.data() + query.size());
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key1");
-        ASSERT_EQ(qs.value(), "value1");
-        ++qs;
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key2");
-        ASSERT_EQ(qs.value(), "value2");
-        ++qs;
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key3");
-        ASSERT_EQ(qs.value(), "value3");
-        ++qs;
-        ASSERT_FALSE(qs);
-    }
-    {
-        brpc::QuerySplitter qs(query.c_str());
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key1");
-        ASSERT_EQ(qs.value(), "value1");
-        ++qs;
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key2");
-        ASSERT_EQ(qs.value(), "value2");
-        ++qs;
-        ASSERT_TRUE(qs);
-        ASSERT_EQ(qs.key(), "key3");
-        ASSERT_EQ(qs.value(), "value3");
-        ++qs;
-        ASSERT_FALSE(qs);
-    }
-}

@@ -76,7 +76,8 @@ void NovaServiceAdaptor::ParseRequestFromIOBuf(
     if (!ParseFromCompressedData(raw_req.body, pb_req, type)) {
         cntl->SetFailed(EREQUEST, "Fail to parse request message, "
                         "CompressType=%s, request_size=%" PRIu64,
-                        CompressTypeToCStr(type), raw_req.body.length());
+                        CompressTypeToCStr(type),
+                        (uint64_t)raw_req.body.length());
     } else {
         cntl->set_request_compress_type(type);
     }
@@ -168,7 +169,7 @@ void PackNovaRequest(butil::IOBuf* buf,
                      const butil::IOBuf& request,
                      const Authenticator* /*not supported*/) {
     ControllerPrivateAccessor accessor(controller);
-    if (accessor.connection_type() == CONNECTION_TYPE_SINGLE) {
+    if (controller->connection_type() == CONNECTION_TYPE_SINGLE) {
         return controller->SetFailed(
             EINVAL, "nova_pbrpc can't work with CONNECTION_TYPE_SINGLE");
     }
